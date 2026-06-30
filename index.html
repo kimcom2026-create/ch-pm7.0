@@ -5011,17 +5011,27 @@
         }
 
         // ---- Google Drive ----
-        function gapiLoaded() {
-            if (typeof gapi === 'undefined') return;
-            gapi.load('client', async () => {
-                try {
-                    await gapi.client.init({ apiKey: syncSettings.apiKey, discoveryDocs: ['https://www.googleapis.com/discovery/v1/apis/drive/v3/rest'] });
-                    gapiInited = true;
-                } catch(e) { console.error('gapi init error', e); }
+        // Wait until an external library global (gapi / google) has finished loading.
+        function waitForGlobal(check, timeoutMs = 8000) {
+            return new Promise((resolve) => {
+                if (check()) return resolve(true);
+                const start = Date.now();
+                const t = setInterval(() => {
+                    if (check()) { clearInterval(t); resolve(true); }
+                    else if (Date.now() - start > timeoutMs) { clearInterval(t); resolve(false); }
+                }, 100);
             });
         }
-        function gisLoaded() {
-            if (typeof google === 'undefined' || !google.accounts) return;
+
+        async function gapiLoaded() {
+            if (!(await waitForGlobal(() => typeof gapi !== 'undefined'))) { console.error('gapi script not loaded'); return; }
+            await new Promise((resolve) => gapi.load('client', resolve));
+            // No discoveryDocs needed — we call the Drive REST endpoints directly via gapi.client.request.
+            await gapi.client.init({ apiKey: syncSettings.apiKey });
+            gapiInited = true;
+        }
+        async function gisLoaded() {
+            if (!(await waitForGlobal(() => typeof google !== 'undefined' && google.accounts && google.accounts.oauth2))) { console.error('GIS script not loaded'); return; }
             if (!syncSettings.clientId) return;
             tokenClient = google.accounts.oauth2.initTokenClient({
                 client_id: syncSettings.clientId,
@@ -5032,24 +5042,26 @@
         }
         async function initGoogleClients() {
             if (!syncSettings.clientId || !syncSettings.apiKey) return false;
-            if (!gapiInited) gapiLoaded();
-            if (!gisInited) gisLoaded();
-            // wait briefly for gapi.client.init
-            for (let i = 0; i < 40 && !gapiInited; i++) await new Promise(r => setTimeout(r, 100));
+            try {
+                if (!gapiInited) await gapiLoaded();
+                if (!gisInited) await gisLoaded();
+            } catch(e) { console.error('init google clients failed', e); setSyncStatus('خطا در بارگذاری کتابخانه گوگل'); }
             return gapiInited && gisInited;
         }
 
         function driveSignIn(silent = false) {
             return new Promise(async (resolve) => {
                 const ready = await initGoogleClients();
-                if (!ready || !tokenClient) { if(!silent) alert('ابتدا Client ID و API Key را وارد کنید و ذخیره نمایید.'); return resolve(false); }
+                if (!ready || !tokenClient) { if(!silent) alert('بارگذاری گوگل ناموفق بود. اتصال اینترنت و درستی Client ID / API Key را بررسی کنید.'); return resolve(false); }
                 tokenClient.callback = async (resp) => {
-                    if (resp.error) { console.warn('token error', resp); return resolve(false); }
+                    if (resp.error) { console.warn('token error', resp); if(!silent) setSyncStatus('ورود لغو شد یا خطا داد: ' + (resp.error_description || resp.error)); return resolve(false); }
+                    // CRITICAL: apply the freshly-issued access token to the API client.
+                    gapi.client.setToken({ access_token: resp.access_token });
                     driveSignedIn = true;
                     try {
                         const info = await gapi.client.request({ path: 'https://www.googleapis.com/oauth2/v3/userinfo' });
                         driveUserEmail = info.result.email || '';
-                    } catch(e) { /* userinfo needs profile scope; ignore */ }
+                    } catch(e) { /* email is best-effort */ }
                     renderSyncUI();
                     resolve(true);
                 };
@@ -5066,16 +5078,19 @@
         }
 
         async function driveFindFile() {
-            const resp = await gapi.client.drive.files.list({ spaces: 'appDataFolder', fields: 'files(id,name,modifiedTime)', q: `name='${DRIVE_FILE_NAME}'` });
-            const files = resp.result.files || [];
+            const resp = await gapi.client.request({
+                path: 'https://www.googleapis.com/drive/v3/files',
+                params: { spaces: 'appDataFolder', fields: 'files(id,name,modifiedTime)', q: `name='${DRIVE_FILE_NAME}'` }
+            });
+            const files = (resp.result && resp.result.files) || [];
             return files.length ? files[0] : null;
         }
 
         async function driveDownload() {
             const file = await driveFindFile();
             if (!file) return null;
-            const resp = await gapi.client.drive.files.get({ fileId: file.id, alt: 'media' });
-            try { return typeof resp.result === 'object' ? resp.result : JSON.parse(resp.body); }
+            const resp = await gapi.client.request({ path: 'https://www.googleapis.com/drive/v3/files/' + file.id, params: { alt: 'media' } });
+            try { return (resp.result && typeof resp.result === 'object') ? resp.result : JSON.parse(resp.body); }
             catch(e) { return JSON.parse(resp.body); }
         }
 
@@ -5111,7 +5126,11 @@
                 await driveUpload(await exportAllData());
                 lastSyncTime = new Date();
                 setSyncStatus('آخرین همگام‌سازی: ' + lastSyncTime.toLocaleTimeString('fa-IR'));
-            } catch(e) { console.error('drive sync failed', e); setSyncStatus('خطا در همگام‌سازی'); }
+            } catch(e) {
+                console.error('drive sync failed', e);
+                const detail = (e && e.result && e.result.error && e.result.error.message) || (e && e.message) || '';
+                setSyncStatus('خطا در همگام‌سازی' + (detail ? ': ' + detail : ''));
+            }
         }
 
         async function driveSyncOnOpen() {
