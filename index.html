@@ -671,7 +671,7 @@
             <div class="w-20 h-20 bg-primary text-on-primary rounded-3xl mx-auto flex items-center justify-center shadow-lg mb-6">
                 <span class="material-symbols-rounded text-5xl">apartment</span>
             </div>
-            <h1 class="text-2xl md:text-3xl font-bold mb-2 leading-relaxed">پروژه‌های عمرانی دانشگاه دریانوردی و علوم دریایی چابهار <span class="text-sm bg-primary/20 text-primary px-2 py-1 rounded-lg ml-2 align-top">v7.0</span></h1>
+            <h1 class="text-2xl md:text-3xl font-bold mb-2 leading-relaxed">پروژه‌های عمرانی دانشگاه دریانوردی و علوم دریایی چابهار <span class="text-sm bg-primary/20 text-primary px-2 py-1 rounded-lg ml-2 align-top">v8.0</span></h1>
             <p class="text-gray-500 text-sm md:text-base">let's build together!</p>
             <p id="landing-sync-indicator" class="hidden mt-3 text-xs text-gray-400 flex items-center justify-center gap-1.5">
                 <span class="material-symbols-rounded text-sm">cloud_done</span>
@@ -1296,6 +1296,11 @@
             <div class="border border-gray-100 rounded-2xl p-4 mb-4 bg-surface-container/40">
                 <h4 class="font-bold text-sm text-gray-700 mb-2 flex items-center gap-2"><span class="material-symbols-rounded text-[18px]">cloud</span> گوگل درایو (همگام‌سازی بین دستگاه‌ها)</h4>
                 <p class="text-[11px] text-gray-500 mb-3">برای فعال‌سازی، طبق فایل راهنما (SETUP.md) یک Client ID و API Key بسازید و اینجا وارد کنید.</p>
+                <div class="text-[11px] rounded-lg px-3 py-2 mb-2 bg-blue-50 border border-blue-200 text-blue-800">
+                    مبدأ (Origin) فعلی این صفحه: <code id="sync-current-origin" dir="ltr" class="font-bold select-all"></code>
+                    <br>این آدرس باید <b>دقیقاً با همین پورت</b> در بخش <b dir="ltr">Authorized JavaScript origins</b> کلاینت OAuth ثبت شده باشد، وگرنه گوگل با خطای <span dir="ltr">Error 400: invalid_request</span> ورود را مسدود می‌کند.
+                </div>
+                <div id="sync-origin-warning" class="hidden text-[11px] rounded-lg px-3 py-2 mb-2 bg-red-50 border border-red-300 text-red-700 font-bold"></div>
                 <label class="block text-xs text-gray-500 mb-1">Client ID</label>
                 <input type="text" id="sync-client-id" dir="ltr" class="w-full mb-2 px-3 py-2 text-xs border border-gray-200 rounded-lg outline-none focus:border-primary" placeholder="xxxx.apps.googleusercontent.com">
                 <label class="block text-xs text-gray-500 mb-1">API Key</label>
@@ -1637,7 +1642,7 @@
                 const tx = db.transaction(storeName, 'readwrite');
                 const store = tx.objectStore(storeName);
                 const req = store.put({ id: id, data: data });
-                req.onsuccess = () => { onDataChanged(storeName); resolve(); };
+                req.onsuccess = () => { onDataChanged(storeName, id); resolve(); };
                 req.onerror = () => reject(req.error);
             });
         }
@@ -1647,7 +1652,7 @@
                 const tx = db.transaction(storeName, 'readwrite');
                 const store = tx.objectStore(storeName);
                 const req = store.delete(id);
-                req.onsuccess = () => { onDataChanged(storeName); resolve(); };
+                req.onsuccess = () => { onDataChanged(storeName, id); resolve(); };
                 req.onerror = () => reject(req.error);
             });
         }
@@ -1732,6 +1737,8 @@
         let projectsList = [];
         let currentProjectData = null;
         let isDirty = false;
+        let autosaveTimer = null;
+        const AUTOSAVE_DELAY_MS = 30000;
         let mainChartInstance = null;
         let chartFinSummary = null;
         let chartFinMaterials = null;
@@ -1801,6 +1808,7 @@
                 await initDB();
                 await migrateFromLocalStorage();
                 await loadSyncSettings();
+                initFolderPermissionRegrant();
                 await loadProjectsList();
                 renderLandingProjects();
                 renderLandingNotifBar();
@@ -1834,8 +1842,16 @@
                     }
                 }
                 
+                if ((e.ctrlKey || e.metaKey) && e.key.toLowerCase() === 's') {
+                    if (document.getElementById('dashboard-view')?.classList.contains('active')) {
+                        e.preventDefault();
+                        saveProjectData();
+                    }
+                    return;
+                }
+
                 if (e.key === 'Enter') {
-                    if (e.target.tagName === 'TEXTAREA') return; 
+                    if (e.target.tagName === 'TEXTAREA') return;
 
                     if (document.getElementById('modal-edit-info').classList.contains('active')) { saveProjectInfo(); e.preventDefault(); }
                     else if (document.getElementById('modal-activity').classList.contains('active')) { saveActivity(); e.preventDefault(); }
@@ -2137,9 +2153,9 @@
             const list = document.getElementById('projects-list'); list.innerHTML = '';
             const filtered = projectsList.filter(p => p.name.includes(filter));
             if(filtered.length === 0) { list.innerHTML = `<li class="p-4 text-center text-gray-400 text-sm">پروژه‌ای یافت نشد. دکمه + را بزنید.</li>`; return; }
-            filtered.forEach(p => {
-                list.innerHTML += `<li class="p-3 rounded-2xl hover:bg-primary/5 flex justify-between items-center group border border-transparent hover:border-primary/20 transition-all"><div class="flex items-center gap-3 cursor-pointer flex-1" onclick="openProject('${p.id}')"><div class="w-10 h-10 bg-primary/10 text-primary rounded-xl flex items-center justify-center"><span class="material-symbols-rounded">corporate_fare</span></div><div><h4 class="text-sm font-bold text-gray-800">${p.name}</h4><p class="text-[10px] text-gray-500">${p.client || 'بدون نام'} • ${p.progress || 0}٪</p></div></div><button onclick="deleteProject('${p.id}', event)" class="w-8 h-8 rounded-full text-red-400 hover:bg-red-50 flex items-center justify-center opacity-0 group-hover:opacity-100 transition-all"><span class="material-symbols-rounded text-sm">delete</span></button></li>`;
-            });
+            list.innerHTML = filtered.map(p =>
+                `<li class="p-3 rounded-2xl hover:bg-primary/5 flex justify-between items-center group border border-transparent hover:border-primary/20 transition-all"><div class="flex items-center gap-3 cursor-pointer flex-1" onclick="openProject('${p.id}')"><div class="w-10 h-10 bg-primary/10 text-primary rounded-xl flex items-center justify-center"><span class="material-symbols-rounded">corporate_fare</span></div><div><h4 class="text-sm font-bold text-gray-800">${escapeHTML(p.name)}</h4><p class="text-[10px] text-gray-500">${escapeHTML(p.client) || 'بدون نام'} • ${p.progress || 0}٪</p></div></div><button onclick="deleteProject('${p.id}', event)" class="w-8 h-8 rounded-full text-red-400 hover:bg-red-50 flex items-center justify-center opacity-0 group-hover:opacity-100 transition-all"><span class="material-symbols-rounded text-sm">delete</span></button></li>`
+            ).join('');
         }
         
         document.getElementById('project-search').addEventListener('focus', () => { renderLandingProjects(document.getElementById('project-search').value); document.getElementById('projects-dropdown').classList.remove('opacity-0', 'translate-y-2', 'pointer-events-none'); });
@@ -2282,8 +2298,7 @@
 
             const projectSwitches = [document.getElementById('quick-project-switch'), document.getElementById('mobile-project-switch')].filter(Boolean);
             projectSwitches.forEach(select => {
-                select.innerHTML = '';
-                projectsList.forEach(p => { select.innerHTML += `<option value="${p.id}" ${p.id === id ? 'selected' : ''}>${p.name}</option>`; });
+                select.innerHTML = projectsList.map(p => `<option value="${p.id}" ${p.id === id ? 'selected' : ''}>${escapeHTML(p.name)}</option>`).join('');
             });
 
             applyDarkModePreference(getSavedDarkModePreference(!!currentProjectData.settings.isDarkMode));
@@ -2330,9 +2345,12 @@
         }
         
         async function quickSwitchProject(id) {
-            if(isDirty && !confirm('تغییرات ذخیره نشده دارید. تغییر پروژه؟')) {
-                document.querySelectorAll('#quick-project-switch, #mobile-project-switch').forEach(select => { select.value = currentProjectData.id; });
-                return;
+            if(isDirty) {
+                const ok = await appConfirm('تغییرات ذخیره نشده دارید. تغییر پروژه؟', 'تغییر پروژه', 'تغییر پروژه', 'swap_horiz', 'bg-primary hover:bg-primary/90');
+                if(!ok) {
+                    document.querySelectorAll('#quick-project-switch, #mobile-project-switch').forEach(select => { select.value = currentProjectData.id; });
+                    return;
+                }
             }
             if(document.getElementById('modal-module-expand').classList.contains('active')) closeModuleExpandDirect();
             await openProject(id);
@@ -2498,7 +2516,18 @@
             document.body.removeChild(a);
         }
 
-        function markAsDirty() { isDirty = true; updateSaveUI(); }
+        function markAsDirty() { isDirty = true; updateSaveUI(); scheduleAutosave(); }
+
+        function scheduleAutosave() {
+            clearTimeout(autosaveTimer);
+            autosaveTimer = setTimeout(() => {
+                // only autosave while still inside the project — if the user chose to
+                // leave and discard changes, this must not resurrect them
+                if (isDirty && currentProjectData && document.getElementById('dashboard-view')?.classList.contains('active')) {
+                    saveProjectData();
+                }
+            }, AUTOSAVE_DELAY_MS);
+        }
         
         function updateSaveUI() {
             const btn = document.getElementById('save-btn'), ind = document.getElementById('save-indicator'), txt = document.getElementById('save-status-text');
@@ -2549,8 +2578,12 @@
             }
         }
         
-        function goToLanding() {
-            if(isDirty && !confirm('تغییرات ذخیره نشده دارید! خارج می‌شوید؟')) return;
+        async function goToLanding() {
+            if(isDirty) {
+                const ok = await appConfirm('تغییرات ذخیره نشده دارید! خارج می‌شوید؟', 'خروج از پروژه', 'خروج', 'logout');
+                if(!ok) return;
+                clearTimeout(autosaveTimer);
+            }
             if(document.getElementById('modal-module-expand').classList.contains('active')) closeModuleExpandDirect();
             document.getElementById('dashboard-view').classList.remove('active'); document.getElementById('landing-view').classList.add('active');
             renderLandingProjects(document.getElementById('project-search').value);
@@ -3064,7 +3097,8 @@
                     if (mp < 20) barColor = "bg-red-500";
                     else if (mp < 50) barColor = "bg-orange-400";
                     
-                    let typeStr = m.type ? ` (${m.type})` : '';
+                    let typeStr = m.type ? ` (${escapeHTML(m.type)})` : '';
+                    let safeName = escapeHTML(m.name);
                     let isPinned = (m._daysLeft >= 0 && m._daysLeft <= 30);
                     
                     let dateBadge = '';
@@ -3088,7 +3122,7 @@
                     matContainer.innerHTML += `
                         <div id="material-card-${m._originalIndex}" class="rounded-xl p-3 text-xs w-full transition-all hover:scale-[1.01] flex flex-col gap-2 ${borderHighlight} group">
                             <div class="flex justify-between items-center font-bold text-gray-700">
-                                <span class="truncate max-w-[150px] dark:text-white" title="${m.name}${typeStr}">${isPinned ? '📌 ' : ''}${m.name}${typeStr}</span>
+                                <span class="truncate max-w-[150px] dark:text-white" title="${safeName}${typeStr}">${isPinned ? '📌 ' : ''}${safeName}${typeStr}</span>
                                 <div class="flex items-center gap-1">
                                     <span class="dark:text-gray-300 text-[10px] ml-1">${mp}٪</span>
                                     <button onclick="openSingleMaterialEdit(${m._originalIndex})" class="dark-soft-action w-6 h-6 rounded-md bg-gray-100 hover:bg-primary hover:text-white text-gray-500 flex items-center justify-center transition-colors tooltip-trigger" title="ویرایش"><span class="material-symbols-rounded text-[14px]">edit</span></button>
@@ -3132,7 +3166,7 @@
                     srvContainer.innerHTML += `
                         <div class="rounded-xl p-3 text-xs w-full transition-all hover:scale-[1.01] flex flex-col gap-2 border border-gray-100 dark:border-slate-700 bg-surface-container group">
                             <div class="flex justify-between items-center font-bold text-gray-700">
-                                <span class="truncate max-w-[150px] dark:text-white" title="${s.desc}">${s.desc || 'بدون عنوان'}</span>
+                                <span class="truncate max-w-[150px] dark:text-white" title="${escapeHTML(s.desc)}">${escapeHTML(s.desc) || 'بدون عنوان'}</span>
                                 <div class="flex items-center gap-1">
                                     <button onclick="openSingleServiceEdit(${s._originalIndex})" class="dark-soft-action w-6 h-6 rounded-md bg-gray-100 hover:bg-primary hover:text-white text-gray-500 flex items-center justify-center transition-colors tooltip-trigger" title="ویرایش"><span class="material-symbols-rounded text-[14px]">edit</span></button>
                                     <button onclick="deleteService(${s._originalIndex})" class="dark-soft-action dark-soft-danger w-6 h-6 rounded-md bg-gray-100 hover:bg-red-500 hover:text-white text-gray-500 flex items-center justify-center transition-colors tooltip-trigger" title="حذف"><span class="material-symbols-rounded text-[14px]">delete</span></button>
@@ -3142,7 +3176,7 @@
                                 <span>مقدار: <strong class="text-gray-800 dark:text-gray-200">${s.quantity} ${s.unit || ''}</strong></span>
                                 <span>هزینه کل: <strong class="text-primary">${total.toLocaleString()} ریال</strong></span>
                             </div>
-                            ${s.notes ? `<div class="text-[9px] text-gray-500 border-t border-gray-200/40 dark:border-slate-700 pt-1 mt-1 truncate">${s.notes}</div>` : ''}
+                            ${s.notes ? `<div class="text-[9px] text-gray-500 border-t border-gray-200/40 dark:border-slate-700 pt-1 mt-1 truncate">${escapeHTML(s.notes)}</div>` : ''}
                         </div>`;
                 });
             }
@@ -3298,7 +3332,7 @@
                         <div class="bg-surface rounded-xl p-3 shadow-sm border border-gray-50 flex items-center gap-3 group/act" data-id="${act.id}">
                             <span class="material-symbols-rounded text-gray-300 cursor-grab hover:text-gray-500 act-handle text-lg hidden-print">drag_indicator</span>
                             <div class="flex-1 min-w-0">
-                                <div class="flex justify-between items-center"><h4 class="text-sm font-bold text-gray-800 truncate flex items-center">${actCheckIcon} ${act.name}</h4> <span class="text-[9px] bg-primary/10 text-primary px-1 rounded shrink-0">WF: ${act.weight}</span></div>
+                                <div class="flex justify-between items-center"><h4 class="text-sm font-bold text-gray-800 truncate flex items-center">${actCheckIcon} ${escapeHTML(act.name)}</h4> <span class="text-[9px] bg-primary/10 text-primary px-1 rounded shrink-0">WF: ${act.weight}</span></div>
                                 <div class="w-full bg-gray-100 h-1.5 rounded-full mt-1.5 overflow-hidden"><div id="bar-${act.id}" class="h-full transition-all duration-300" style="width: ${prog}%; background-color: ${getProgressColor(prog)};"></div></div>
                             </div>
                             <div class="flex items-center gap-1 shrink-0">
@@ -3327,7 +3361,7 @@
                         </div>`;
                 }
 
-                container.insertAdjacentHTML('beforeend', `<div class="accordion-item bg-surface rounded-2xl shadow-sm border border-gray-100 overflow-hidden"><div class="wbs-section-header p-4 cursor-pointer flex justify-between items-center hover:bg-gray-50 transition-colors" onclick="this.parentElement.classList.toggle('open')"><div class="flex items-center gap-3"><div id="sec-prog-${sec.id}" class="w-10 h-10 flex items-center justify-center rounded-full bg-transparent">${displaySecProgress}</div><h4 class="font-bold text-gray-800 text-sm">${sec.title}</h4></div><span class="material-symbols-rounded text-gray-400 chevron transition-transform hidden-print">expand_more</span></div><div class="accordion-content bg-surface-container/20"><div class="p-3 space-y-2 border-t border-gray-100" id="acts-list-${sec.id}">${actsHTML}</div><div class="px-3 pb-3 hidden-print"><button onclick="openActivityModal('${sec.id}')" class="w-full py-2 border-2 border-dashed border-gray-200 rounded-xl text-gray-400 hover:border-primary/50 hover:text-primary transition-colors flex items-center justify-center gap-1 text-sm font-bold"><span class="material-symbols-rounded text-lg">add</span> افزودن ریزفعالیت</button></div></div></div>`);
+                container.insertAdjacentHTML('beforeend', `<div class="accordion-item bg-surface rounded-2xl shadow-sm border border-gray-100 overflow-hidden"><div class="wbs-section-header p-4 cursor-pointer flex justify-between items-center hover:bg-gray-50 transition-colors" onclick="this.parentElement.classList.toggle('open')"><div class="flex items-center gap-3"><div id="sec-prog-${sec.id}" class="w-10 h-10 flex items-center justify-center rounded-full bg-transparent">${displaySecProgress}</div><h4 class="font-bold text-gray-800 text-sm">${escapeHTML(sec.title)}</h4></div><span class="material-symbols-rounded text-gray-400 chevron transition-transform hidden-print">expand_more</span></div><div class="accordion-content bg-surface-container/20"><div class="p-3 space-y-2 border-t border-gray-100" id="acts-list-${sec.id}">${actsHTML}</div><div class="px-3 pb-3 hidden-print"><button onclick="openActivityModal('${sec.id}')" class="w-full py-2 border-2 border-dashed border-gray-200 rounded-xl text-gray-400 hover:border-primary/50 hover:text-primary transition-colors flex items-center justify-center gap-1 text-sm font-bold"><span class="material-symbols-rounded text-lg">add</span> افزودن ریزفعالیت</button></div></div></div>`);
                 const actListElem = document.getElementById(`acts-list-${sec.id}`);
                 if(actListElem && typeof Sortable !== 'undefined') new Sortable(actListElem, { handle: '.act-handle', animation: 150, onEnd: function() { updateWBSOrder(sec.id); } });
             });
@@ -3415,12 +3449,12 @@
             });
         }
 
-        function openGanttModal() { const container = document.getElementById('gantt-content'); container.innerHTML = ''; let activitiesWithDates = []; currentProjectData.sections.forEach(sec => { if(sec.active) { sec.activities.forEach(act => { if(act.start && act.end) activitiesWithDates.push({...act, secTitle: sec.title}); }); } }); if(activitiesWithDates.length === 0) { container.innerHTML = '<p class="p-4 text-center text-gray-500 text-xs">هیچ فعالیتی با تاریخ مشخص وجود ندارد.</p>'; } else { let html = '<div class="space-y-2 p-2" style="direction:rtl; text-align:right;">'; activitiesWithDates.forEach(act => { let prog = act.total>0 ? Math.round((act.done/act.total)*100) : 0; html += `<div class="flex items-center gap-4 bg-gray-50 p-2 rounded text-xs border border-gray-100" style="direction:rtl; text-align:right;"><div class="w-1/3 font-bold truncate" title="${act.name}">${act.name} <span class="text-[9px] text-gray-400 font-normal">(${act.secTitle})</span></div><div class="w-24 text-gray-500 text-center">${act.start}</div><div class="flex-1 relative h-6 bg-surface-container rounded-full overflow-hidden"><div class="absolute top-0 right-0 h-full bg-blue-500/20 w-full"></div><div class="absolute top-0 right-0 h-full flex items-center px-2 text-[10px] text-white" style="width: ${prog}%; background-color: ${getProgressColor(prog)};">${prog}%</div></div><div class="w-24 text-gray-500 text-center">${act.end}</div></div>`; }); html += '</div>'; container.innerHTML = html; } document.getElementById('modal-gantt').classList.add('active'); }
+        function openGanttModal() { const container = document.getElementById('gantt-content'); container.innerHTML = ''; let activitiesWithDates = []; currentProjectData.sections.forEach(sec => { if(sec.active) { sec.activities.forEach(act => { if(act.start && act.end) activitiesWithDates.push({...act, secTitle: sec.title}); }); } }); if(activitiesWithDates.length === 0) { container.innerHTML = '<p class="p-4 text-center text-gray-500 text-xs">هیچ فعالیتی با تاریخ مشخص وجود ندارد.</p>'; } else { let html = '<div class="space-y-2 p-2" style="direction:rtl; text-align:right;">'; activitiesWithDates.forEach(act => { let prog = act.total>0 ? Math.round((act.done/act.total)*100) : 0; html += `<div class="flex items-center gap-4 bg-gray-50 p-2 rounded text-xs border border-gray-100" style="direction:rtl; text-align:right;"><div class="w-1/3 font-bold truncate" title="${escapeHTML(act.name)}">${escapeHTML(act.name)} <span class="text-[9px] text-gray-400 font-normal">(${escapeHTML(act.secTitle)})</span></div><div class="w-24 text-gray-500 text-center">${act.start}</div><div class="flex-1 relative h-6 bg-surface-container rounded-full overflow-hidden"><div class="absolute top-0 right-0 h-full bg-blue-500/20 w-full"></div><div class="absolute top-0 right-0 h-full flex items-center px-2 text-[10px] text-white" style="width: ${prog}%; background-color: ${getProgressColor(prog)};">${prog}%</div></div><div class="w-24 text-gray-500 text-center">${act.end}</div></div>`; }); html += '</div>'; container.innerHTML = html; } document.getElementById('modal-gantt').classList.add('active'); }
 
         function openWBSSettingsModal() {
             const list = document.getElementById('settings-wbs-list'); list.innerHTML = '';
             currentProjectData.sections.forEach(sec => {
-                list.innerHTML += `<label class="flex items-center gap-2 text-sm cursor-pointer"><input type="checkbox" data-id="${sec.id}" ${sec.active ? 'checked' : ''} class="w-4 h-4 text-primary rounded"> ${sec.title}</label>`;
+                list.innerHTML += `<label class="flex items-center gap-2 text-sm cursor-pointer"><input type="checkbox" data-id="${sec.id}" ${sec.active ? 'checked' : ''} class="w-4 h-4 text-primary rounded"> ${escapeHTML(sec.title)}</label>`;
             });
             document.getElementById('modal-wbs-settings').classList.add('active');
         }
@@ -3686,15 +3720,18 @@
             if(document.getElementById('modal-kanban-settings')?.classList.contains('active')) renderKanbanSettingsPeople();
         }
 
+        let kanbanSortableInstances = [];
         function renderKanban() {
             normalizeKanbanData();
             applyKanbanStyle();
             renderKanbanPeopleTray();
             const k = currentProjectData.kanban; const cols = ['todo', 'doing', 'done'];
             const activePeople = k.settings.activePeople || [];
+            kanbanSortableInstances.forEach(instance => instance.destroy());
+            kanbanSortableInstances = [];
             cols.forEach(col => {
                 const container = document.getElementById('kb-' + col); if(!container) return;
-                container.innerHTML = '';
+                let colHTML = '';
                 [...k[col]]
                     .filter(task => activePeople.length === 0 || (task.assigneeIds || []).some(id => activePeople.includes(id)))
                     .sort((a, b) => Number(b.pinned) - Number(a.pinned))
@@ -3702,7 +3739,7 @@
                     const isLong = task.text.length > 46;
                     const displayText = isLong ? task.text.substring(0, 46) + '...' : task.text;
                     const assignees = (task.assigneeIds || []).map(id => getKanbanPerson(id)).filter(Boolean);
-                    container.innerHTML += `
+                    colHTML += `
                         <div class="bg-surface p-2.5 rounded-lg text-xs shadow-sm border border-gray-100 group kb-task relative ${task.pinned ? 'is-pinned' : ''}" data-id="${task.id}" ondragover="allowKanbanAssignDrop(event)" ondragleave="clearKanbanAssignHover(event)" ondrop="assignKanbanPersonDrop(event, '${task.id}')">
                             <button onclick="toggleKanbanPin('${task.id}')" class="absolute right-2 top-2 w-6 h-6 rounded-md ${task.pinned ? 'bg-orange-100 text-orange-600' : 'text-gray-300 hover:text-orange-500 hover:bg-orange-50'} flex items-center justify-center transition hidden-print" title="سنجاق کردن"><span class="material-symbols-rounded text-[15px]">push_pin</span></button>
                             <div class="absolute left-2 top-2 flex gap-1 opacity-70 hover:opacity-100 transition hidden-print">
@@ -3713,7 +3750,8 @@
                             ${assignees.length ? `<div class="mt-2 flex flex-wrap gap-1 justify-start">${assignees.map(p => `<span class="inline-flex items-center gap-1 px-2 py-0.5 rounded-full bg-primary/10 text-primary text-[9px] font-black"><span class="material-symbols-rounded text-[12px]">person</span>${escapeHTML(p.name)}<button onclick="event.stopPropagation(); unassignKanbanPerson('${task.id}', '${p.id}')" class="hover:text-red-500 flex items-center hidden-print" title="حذف تخصیص این فرد"><span class="material-symbols-rounded text-[11px]">close</span></button></span>`).join('')}</div>` : ''}
                         </div>`;
                     });
-                if(typeof Sortable !== 'undefined') new Sortable(container, { group: 'kanban', animation: 150, onEnd: function() { updateKanbanState(); } });
+                container.innerHTML = colHTML;
+                if(typeof Sortable !== 'undefined') kanbanSortableInstances.push(new Sortable(container, { group: 'kanban', animation: 150, onEnd: function() { updateKanbanState(); } }));
             });
         }
         function toggleKanbanText(el) {
@@ -4784,7 +4822,7 @@
                     <div class="flex items-center gap-3 flex-1 min-w-0">
                         <span class="shrink-0 text-base">${icon}</span>
                         <span class="text-xs font-black text-white px-2 py-0.5 rounded-full shrink-0" style="${labelBg}">${label}</span>
-                        <span class="text-xs text-gray-700 truncate">پروژه <strong class="text-gray-900">${a.projName}</strong>: ${a.detail}</span>
+                        <span class="text-xs text-gray-700 truncate">پروژه <strong class="text-gray-900">${escapeHTML(a.projName)}</strong>: ${escapeHTML(a.detail)}</span>
                     </div>
                     <button onclick="openProject('${a.projId}')" class="shrink-0 text-xs font-black text-primary hover:underline whitespace-nowrap">مشاهده پروژه</button>
                 </div>`;
@@ -4800,18 +4838,18 @@
                 const daysLeft = getJalaaliDiffDays(m.expDate);
                 // Expired
                 if (m.expDate && daysLeft < 0) {
-                    alerts.push({ key: `expired-${idx}`, materialIndex: idx, type: 'expired', icon: '❌', color: 'bg-red-50 border-red-300 text-red-700', label: 'منقضی شده', msg: `<strong>${m.name}</strong> — تاریخ انقضا: ${m.expDate}` });
+                    alerts.push({ key: `expired-${idx}`, materialIndex: idx, type: 'expired', icon: '❌', color: 'bg-red-50 border-red-300 text-red-700', label: 'منقضی شده', msg: `<strong>${escapeHTML(m.name)}</strong> — تاریخ انقضا: ${escapeHTML(m.expDate)}` });
                 }
                 // Expiring within 30 days
                 else if (m.expDate && daysLeft >= 0 && daysLeft <= 30) {
-                    alerts.push({ key: `expiring-${idx}`, materialIndex: idx, type: 'expiring', icon: '⚠️', color: 'bg-orange-50 border-orange-300 text-orange-700', label: 'نزدیک به انقضا', msg: `<strong>${m.name}</strong> — فقط <strong>${Math.ceil(daysLeft)}</strong> روز تا انقضا (${m.expDate})` });
+                    alerts.push({ key: `expiring-${idx}`, materialIndex: idx, type: 'expiring', icon: '⚠️', color: 'bg-orange-50 border-orange-300 text-orange-700', label: 'نزدیک به انقضا', msg: `<strong>${escapeHTML(m.name)}</strong> — فقط <strong>${Math.ceil(daysLeft)}</strong> روز تا انقضا (${escapeHTML(m.expDate)})` });
                 }
                 // Low stock (< 20%) and not dismissed
                 const purchased = m.total || 0;
                 const remaining = m.remaining !== undefined ? m.remaining : purchased;
                 const mp = purchased > 0 ? Math.round((remaining / purchased) * 100) : 0;
                 if (mp < 20 && purchased > 0 && !m.dismissedLowStock) {
-                    alerts.push({ key: `lowstock-${idx}`, materialIndex: idx, type: 'lowstock', icon: '📦', color: 'bg-yellow-50 border-yellow-300 text-yellow-700', label: 'موجودی کم', msg: `<strong>${m.name}</strong> — فقط <strong>${mp}٪</strong> موجودی باقی است` });
+                    alerts.push({ key: `lowstock-${idx}`, materialIndex: idx, type: 'lowstock', icon: '📦', color: 'bg-yellow-50 border-yellow-300 text-yellow-700', label: 'موجودی کم', msg: `<strong>${escapeHTML(m.name)}</strong> — فقط <strong>${mp}٪</strong> موجودی باقی است` });
                 }
             });
             return alerts.filter(alert => !tempDismissedNotifications.has(alert.key));
@@ -4930,6 +4968,9 @@
 
         let syncSettings = { clientId: '', apiKey: '', driveEnabled: false };
         let suspendSync = false;           // true while importing, to avoid sync loops
+        let localLastModified = 0;         // ms timestamp of the last real data change on this device
+        let lastUploadedHash = '';         // content hash of the last snapshot uploaded to Drive
+        const SYNC_BOOKKEEPING_KEYS = ['syncSettings', 'backupDirHandle', 'lastModifiedAt', 'lastUploadedHash'];
         let gapiInited = false, gisInited = false, tokenClient = null;
         let driveSignedIn = false, driveUserEmail = '';
         let driveSyncTimer = null, folderBackupTimer = null;
@@ -4945,7 +4986,7 @@
                 const data = await idbGet('projects', id);
                 if (data) projects[id] = data;
             }
-            return { version: SYNC_SCHEMA_VERSION, exportedAt: new Date().toISOString(), projectsList: projectsListSnap, projects };
+            return { version: SYNC_SCHEMA_VERSION, exportedAt: new Date().toISOString(), lastModifiedAt: localLastModified || 0, projectsList: projectsListSnap, projects };
         }
 
         async function importAllData(snapshot) {
@@ -4957,21 +4998,50 @@
                 for (const id of existingIds) await idbDelete('projects', id);
                 for (const id of Object.keys(snapshot.projects)) await idbPut('projects', id, snapshot.projects[id]);
                 await idbPut('metadata', 'my_projects', snapshot.projectsList || []);
+                // adopt the remote modification time so we don't immediately re-upload
+                localLastModified = snapshot.lastModifiedAt || new Date(snapshot.exportedAt || Date.now()).getTime();
+                await idbPut('metadata', 'lastModifiedAt', localLastModified);
             } finally {
                 suspendSync = false;
             }
             await loadProjectsList();
             renderLandingProjects();
             try { renderLandingNotifBar(); } catch(e){}
+            // local content now equals the Drive copy — no need to re-upload it
+            try { await rememberUploadedHash(await computeSnapshotHash(snapshot)); } catch(e) {}
         }
 
-        function onDataChanged(storeName) {
-            if (suspendSync) return;
-            if (storeName === 'metadata') {
-                // internal sync bookkeeping keys shouldn't trigger a re-sync loop
+        // Hash of the snapshot *content* (not timestamps), used to skip no-op Drive uploads.
+        async function computeSnapshotHash(snapshot) {
+            const content = JSON.stringify({ projectsList: snapshot.projectsList, projects: snapshot.projects });
+            if (window.crypto && crypto.subtle && window.isSecureContext) {
+                const buf = await crypto.subtle.digest('SHA-256', new TextEncoder().encode(content));
+                return Array.from(new Uint8Array(buf)).map(b => b.toString(16).padStart(2, '0')).join('');
             }
+            // non-secure-context fallback: FNV-1a + length
+            let h = 0x811c9dc5;
+            for (let i = 0; i < content.length; i++) { h ^= content.charCodeAt(i); h = Math.imul(h, 0x01000193) >>> 0; }
+            return 'fnv-' + h.toString(16) + '-' + content.length;
+        }
+
+        async function rememberUploadedHash(hash) {
+            lastUploadedHash = hash;
+            try { await idbPut('metadata', 'lastUploadedHash', hash); } catch(e) {}
+        }
+
+        function onDataChanged(storeName, id) {
+            if (suspendSync) return;
+            // internal sync bookkeeping keys shouldn't trigger a re-sync loop
+            if (storeName === 'metadata' && SYNC_BOOKKEEPING_KEYS.includes(id)) return;
+            touchLocalModified();
             scheduleDriveSync();
             scheduleFolderBackup();
+        }
+
+        function touchLocalModified() {
+            localLastModified = Date.now();
+            // persisted so the device-vs-drive comparison survives reloads
+            idbPut('metadata', 'lastModifiedAt', localLastModified).catch(() => {});
         }
 
         function setSyncStatus(msg) {
@@ -5002,6 +5072,8 @@
                 if (s) syncSettings = Object.assign(syncSettings, s);
                 const h = await idbGet('metadata', 'backupDirHandle');
                 if (h) backupDirHandle = h;
+                localLastModified = (await idbGet('metadata', 'lastModifiedAt')) || 0;
+                lastUploadedHash = (await idbGet('metadata', 'lastUploadedHash')) || '';
             } catch(e) { console.warn('loadSyncSettings failed', e); }
         }
         async function persistSyncSettings() {
@@ -5030,13 +5102,27 @@
             await gapi.client.init({ apiKey: syncSettings.apiKey });
             gapiInited = true;
         }
+        let pendingSignInResolve = null;
+
+        function describeOAuthError(err) {
+            const type = (err && (err.type || err.error)) || '';
+            if (type === 'popup_failed_to_open') return 'مرورگر پنجره ورود گوگل را مسدود کرد. Popup را برای این سایت مجاز کنید و دوباره تلاش کنید.';
+            if (type === 'popup_closed') return 'پنجره ورود گوگل بسته شد. اگر داخل پنجره خطای «Error 400: invalid_request» دیدید، بررسی کنید: ۱) مبدأ ' + window.location.origin + ' دقیقاً در Authorized JavaScript origins ثبت شده باشد، ۲) نوع OAuth Client «Web application» باشد، ۳) ایمیل شما در Test users اضافه شده باشد.';
+            return 'خطا در ورود گوگل' + (type ? ' (' + type + ')' : '') + ' — مبدأ ' + window.location.origin + ' باید در Authorized JavaScript origins ثبت شده باشد.';
+        }
+
         async function gisLoaded() {
             if (!(await waitForGlobal(() => typeof google !== 'undefined' && google.accounts && google.accounts.oauth2))) { console.error('GIS script not loaded'); return; }
             if (!syncSettings.clientId) return;
             tokenClient = google.accounts.oauth2.initTokenClient({
                 client_id: syncSettings.clientId,
                 scope: DRIVE_SCOPE,
-                callback: () => {} // set per-request
+                callback: () => {}, // set per-request
+                error_callback: (err) => {
+                    console.warn('GIS sign-in error', err);
+                    setSyncStatus(describeOAuthError(err));
+                    if (pendingSignInResolve) { const r = pendingSignInResolve; pendingSignInResolve = null; r(false); }
+                }
             });
             gisInited = true;
         }
@@ -5053,7 +5139,9 @@
             return new Promise(async (resolve) => {
                 const ready = await initGoogleClients();
                 if (!ready || !tokenClient) { if(!silent) alert('بارگذاری گوگل ناموفق بود. اتصال اینترنت و درستی Client ID / API Key را بررسی کنید.'); return resolve(false); }
+                pendingSignInResolve = resolve; // error_callback resolves(false) if the popup fails
                 tokenClient.callback = async (resp) => {
+                    pendingSignInResolve = null;
                     if (resp.error) { console.warn('token error', resp); if(!silent) setSyncStatus('ورود لغو شد یا خطا داد: ' + (resp.error_description || resp.error)); return resolve(false); }
                     // CRITICAL: apply the freshly-issued access token to the API client.
                     gapi.client.setToken({ access_token: resp.access_token });
@@ -5122,8 +5210,27 @@
         async function driveSyncNow(isAuto = false) {
             if (!driveSignedIn) { if(!isAuto) alert('ابتدا به گوگل درایو متصل شوید.'); return; }
             try {
+                const snapshot = await exportAllData();
+                const hash = await computeSnapshotHash(snapshot);
+                // auto-syncs skip the upload when nothing actually changed;
+                // a manual sync (button) always force-pushes
+                if (isAuto && hash === lastUploadedHash) {
+                    setSyncStatus('داده‌ها همگام است');
+                    return;
+                }
                 setSyncStatus('در حال همگام‌سازی...');
-                await driveUpload(await exportAllData());
+                try {
+                    await driveUpload(snapshot);
+                } catch(e) {
+                    // access tokens expire after ~1h: try one silent re-auth, then retry
+                    if (e && (e.status === 401 || e.status === 403)) {
+                        driveSignedIn = false;
+                        const ok = await driveSignIn(true);
+                        if (!ok) throw e;
+                        await driveUpload(snapshot);
+                    } else { throw e; }
+                }
+                await rememberUploadedHash(hash);
                 lastSyncTime = new Date();
                 setSyncStatus('آخرین همگام‌سازی: ' + lastSyncTime.toLocaleTimeString('fa-IR'));
             } catch(e) {
@@ -5139,20 +5246,26 @@
             if (!ok) return;
             try {
                 const remote = await driveDownload();
-                if (!remote) { await driveSyncNow(true); return; }
+                if (!remote) { lastUploadedHash = ''; await driveSyncNow(true); return; }
                 const local = await exportAllData();
-                const remoteTime = new Date(remote.exportedAt || 0).getTime();
+                // compare real modification times (falling back to the remote upload time
+                // for snapshots created before lastModifiedAt existed)
+                const remoteModified = remote.lastModifiedAt || new Date(remote.exportedAt || 0).getTime();
+                const localModified = local.lastModifiedAt || 0;
                 const localHasData = (local.projectsList || []).length > 0;
-                if (!localHasData || remoteTime >= new Date(local.exportedAt || 0).getTime()) {
-                    if (localHasData && remoteTime) {
+                if (!localHasData || remoteModified > localModified) {
+                    if (localHasData) {
                         const proceed = await appConfirm('نسخه‌ای جدیدتر روی گوگل درایو یافت شد. داده‌های این دستگاه با نسخه درایو جایگزین شود؟', 'همگام‌سازی', 'بارگذاری از درایو', 'cloud_download', 'bg-primary hover:bg-primary/90');
                         if (!proceed) return;
                     }
                     await importAllData(remote);
                     lastSyncTime = new Date();
                     setSyncStatus('داده‌ها از درایو بارگذاری شد');
-                } else {
+                } else if (localModified > remoteModified) {
                     await driveSyncNow(true);
+                } else {
+                    lastSyncTime = new Date();
+                    setSyncStatus('داده‌ها همگام است');
                 }
             } catch(e) { console.error('sync-on-open failed', e); }
         }
@@ -5179,6 +5292,20 @@
                 renderSyncUI();
                 await folderBackupNow();
             } catch(e) { if (e.name !== 'AbortError') console.error('pickBackupFolder', e); }
+        }
+
+        // Browsers reset the folder permission to "prompt" after a restart and only allow
+        // re-requesting it during a user gesture — so we piggyback on the first click.
+        function initFolderPermissionRegrant() {
+            if (!folderApiSupported || !backupDirHandle) return;
+            const regrant = async () => {
+                try {
+                    if ((await backupDirHandle.queryPermission({ mode: 'readwrite' })) === 'prompt') {
+                        await backupDirHandle.requestPermission({ mode: 'readwrite' });
+                    }
+                } catch(e) { /* ignore */ }
+            };
+            document.addEventListener('pointerdown', regrant, { once: true });
         }
 
         function scheduleFolderBackup() {
@@ -5209,6 +5336,17 @@
         }
 
         function renderSyncUI() {
+            const originEl = document.getElementById('sync-current-origin');
+            if (originEl) originEl.textContent = window.location.origin;
+            const originWarn = document.getElementById('sync-origin-warning');
+            if (originWarn) {
+                if (window.location.protocol === 'file:') {
+                    originWarn.textContent = 'این صفحه با file:// باز شده است؛ گوگل ورود از این حالت را اجازه نمی‌دهد. برنامه را از یک آدرس وب (GitHub Pages یا localhost) باز کنید.';
+                    originWarn.classList.remove('hidden');
+                } else {
+                    originWarn.classList.add('hidden');
+                }
+            }
             const emailEl = document.getElementById('sync-drive-email');
             const connectBtn = document.getElementById('sync-connect-btn');
             if (emailEl) emailEl.textContent = driveSignedIn ? (driveUserEmail ? ('متصل: ' + driveUserEmail) : 'متصل به گوگل درایو') : 'متصل نیست';
